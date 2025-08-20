@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Red Neuronal 8×8 — Reconocimiento de Dígitos (con entrenamiento)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>Red Neuronal 8×8 → 0..9 (ReLU + Softmax)</h1>
+    <div id="info-cabecera">
+      <span>Capas: 64 → 16 → 16 → 10 (con bias)</span>
+      <label class="toggle">
+        <input type="checkbox" id="chk-en-vivo" checked />
+        <span>Predicción en vivo</span>
+      </label>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <!-- IZQUIERDA: Dibujo -->
+    <section class="panel panel-izq">
+      <h2>Dibuja un dígito</h2>
+      <div class="envoltorio-canvas">
+        <canvas id="lienzo" width="256" height="256"></canvas>
+      </div>
+
+      <div class="controles">
+        <button id="btn-limpiar" title="Vaciar el lienzo">Limpiar</button>
+        <button id="btn-suavizar" title="Suavizado ligero del trazo">Suavizar</button>
+        <button id="btn-reiniciar-pesos" title="Reinicia los pesos aleatoriamente">Reiniciar pesos</button>
+
+        <label class="slider">
+          Tamaño pincel
+          <input type="range" id="rng-pincel" min="6" max="40" value="20" />
+        </label>
+      </div>
+
+      <h3>Etiquetado & entrenamiento</h3>
+      <div class="controles">
+        <label>Etiqueta real:
+          <select id="sel-etiqueta">
+            <option>0</option><option>1</option><option>2</option><option>3</option><option>4</option>
+            <option selected>5</option><option>6</option><option>7</option><option>8</option><option>9</option>
+          </select>
+        </label>
+        <button id="btn-agregar-ejemplo">Añadir ejemplo al dataset</button>
+      </div>
+
+      <div class="controles">
+        <label>LR
+          <input type="number" id="inp-lr" step="0.001" value="0.1" style="width:80px" />
+        </label>
+        <label>L2
+          <input type="number" id="inp-l2" step="0.0001" value="0.0" style="width:80px" />
+        </label>
+        <button id="btn-train-1">Entrenar 1 paso (dibujo actual)</button>
+        <button id="btn-train-50">Entrenar 50 pasos (dataset)</button>
+        <button id="btn-train-500">Entrenar 500 pasos (dataset)</button>
+      </div>
+
+      <p class="pista">Consejos: agrega varios ejemplos por dígito, usa “Suavizar” y traza centrado.</p>
+      <p class="pista">Dataset actual: <span id="lbl-dataset">0</span> ejemplos.</p>
+    </section>
+
+    <!-- CENTRO: Red neuronal + Grids a la derecha -->
+    <section class="panel panel-centro">
+      <h2>Red neuronal</h2>
+
+      <!-- NUEVO LAYOUT INTERNO: canvas grande + columna de grids a la derecha -->
+      <div class="net-layout">
+        <div class="net-left">
+          <!-- Tamaño reducido a 820×820 para que quepa con las grids a la derecha -->
+          <canvas id="red" width="820" height="820"></canvas>
+        </div>
+
+        <div class="net-right">
+          <div class="caracteristicas">
+            <h3>Mapas de características</h3>
+
+            <div class="feature-block">
+              <div class="feature-title">Capa oculta 1 (8×8 por neurona)</div>
+              <!-- Grids reajustados a 240×240 -->
+              <canvas id="grid-h1" width="240" height="240"></canvas>
+            </div>
+
+            <div class="feature-block">
+              <div class="feature-title">Capa oculta 2 (4×4 sobre H1)</div>
+              <canvas id="grid-h2" width="240" height="240"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="leyenda">
+        <span class="chip pos">peso +</span>
+        <span class="chip neg">peso −</span>
+        <span>Grosor y opacidad ∝ |peso|</span>
+      </div>
+    </section>
+
+    <!-- DERECHA: Salida -->
+    <section class="panel panel-der">
+      <h2>Resultado</h2>
+      <div id="resultado" class="resultado-grande">?</div>
+
+      <h3>Probabilidades</h3>
+      <div id="probabilidades" class="probabilidades"></div>
+
+      <h3>Vista 8×8</h3>
+      <canvas id="mini" width="128" height="128"></canvas>
+      <p class="pista">Se escala ×16 para inspección visual.</p>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>Demo educativa en navegador (HTML+CSS+JS). Entrenamiento con SGD y L2 opcional.</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
