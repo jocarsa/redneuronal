@@ -2,7 +2,13 @@
 // Parámetros y activaciones
 // ======================
 const CAPAS = [64, 16, 16, 10]; // 8x8 → 16 → 16 → 10
-const RADIO_NEURONA = 8;
+const RADIO_NEURONA = 8; // (compat)
+
+// Escala de gauge por capa: [Entrada, Oculta1, Oculta2, Salida]
+let GAUGE_SCALES = [1.0, 2.0, 2.5, 3.0]; // sube a 1.3–1.8 si quieres más grandes
+
+// Duración de la animación de transición (ms)
+let TWEEN_MS = 500; // ajustable en caliente con setTweenMs(ms)
 
 const relu = x => Math.max(0, x);
 const drelu = x => (x > 0 ? 1 : 0);
@@ -25,6 +31,7 @@ function matrizAleatoria(filas, cols){
 function vectorCeros(n){ return new Array(n).fill(0); }
 function oneHot(k, n=10){ const v = vectorCeros(n); v[k]=1; return v; }
 function dot(row, x){ let s = 0; for(let i=0;i<row.length;i++) s += row[i]*x[i]; return s; }
+function clamp01(v){ return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
 // Color por peso para grids (rojo− / gris / azul+)
 function colorPorPeso(w, maxAbs){
@@ -55,8 +62,7 @@ function reiniciarPesos(){
   W1 = matrizAleatoria(16, 64); b1 = vectorCeros(16);
   W2 = matrizAleatoria(16, 16); b2 = vectorCeros(16);
   W3 = matrizAleatoria(10, 16); b3 = vectorCeros(10);
-  dibujarRed(ultimaEntrada, ultimasProbs, ultH1, ultH2);
-  dibujarGridsCaracteristicas(ultH1, ultH2);
+  // recalcular a partir del lienzo actual y lanzar tween a nuevos objetivos
   hayCambios = true;
 }
 
@@ -287,12 +293,151 @@ function pintarProbabilidades(probs){
 }
 
 // ======================
-// Visualización de red (pesos y activaciones)
+// Visualización de red (pesos y activaciones) — GAUGES
 // ======================
 const lienzoRed = document.getElementById("red");
 const rctx = lienzoRed.getContext("2d");
 
-function dibujarRed(entrada=[], salida=[], h1=[], h2=[]){
+// Radios base por capa y multiplicadores
+function radioPorCapa(li){
+  const base = [6, 10, 10, 12]; // entrada, oculta1, oculta2, salida
+  const scale = GAUGE_SCALES[li] ?? 1.0;
+  return Math.max(3, Math.round(base[li] * scale));
+}
+
+// Dibuja un gauge radial con aguja para un valor v ∈ [0,1]
+function dibujarGauge(x, y, r, v){
+  const start = -Math.PI * 5/6;  // -150°
+  const end   =  Math.PI * 5/6;  // +150°
+  const ang   = start + clamp01(v) * (end - start);
+
+  rctx.save();
+  rctx.translate(x, y);
+
+  // Fondo del gauge
+  rctx.beginPath();
+  rctx.arc(0, 0, r, 0, Math.PI*2);
+  rctx.fillStyle = "#0b0e1b";
+  rctx.fill();
+
+  // Aro exterior
+  rctx.lineWidth = 1.5;
+  rctx.strokeStyle = "#c9d2ff22";
+  rctx.beginPath();
+  rctx.arc(0, 0, r, 0, Math.PI*2);
+  rctx.stroke();
+
+  // Arco base (escala)
+  rctx.lineWidth = Math.max(2, Math.round(r*0.25/3));
+  rctx.strokeStyle = "rgba(180,190,255,0.28)";
+  rctx.beginPath();
+  rctx.arc(0, 0, r - 2, start, end);
+  rctx.stroke();
+
+  // Arco de valor
+  rctx.strokeStyle = "rgba(98,186,255,0.85)";
+  rctx.beginPath();
+  rctx.arc(0, 0, r - 2, start, ang);
+  rctx.stroke();
+
+  // Aguja
+  const nx = Math.cos(ang) * (r - 3);
+  const ny = Math.sin(ang) * (r - 3);
+  rctx.lineWidth = Math.max(1.5, r*0.18);
+  rctx.strokeStyle = "#8ec5ff";
+  rctx.beginPath();
+  rctx.moveTo(0, 0);
+  rctx.lineTo(nx, ny);
+  rctx.stroke();
+
+  // Núcleo
+  rctx.beginPath();
+  rctx.arc(0, 0, Math.max(1.2, r * 0.18), 0, Math.PI*2);
+  rctx.fillStyle = "#0b0e1b";
+  rctx.fill();
+  rctx.lineWidth = 1.2;
+  rctx.strokeStyle = "#c9d2ff44";
+  rctx.stroke();
+
+  rctx.restore();
+}
+
+// ======================
+// Tween de activaciones (animación)
+// ======================
+
+// Easing (rápido y suave)
+function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+
+// Estados "mostrados" en gauges (interpolados)
+let dispEntrada = new Array(64).fill(0);
+let dispH1      = new Array(16).fill(0);
+let dispH2      = new Array(16).fill(0);
+let dispSalida  = new Array(10).fill(0);
+
+// Origenes y objetivos del tween
+let startEntrada = dispEntrada.slice();
+let startH1      = dispH1.slice();
+let startH2      = dispH2.slice();
+let startSalida  = dispSalida.slice();
+
+let tgtEntrada = dispEntrada.slice();
+let tgtH1      = dispH1.slice();
+let tgtH2      = dispH2.slice();
+let tgtSalida  = dispSalida.slice();
+
+let tweenStartTime = 0;
+let animating = false;
+
+function setGaugeTargets(entrada, a1, a2, probs){
+  // copiar estados actuales como origen
+  startEntrada = dispEntrada.slice();
+  startH1      = dispH1.slice();
+  startH2      = dispH2.slice();
+  startSalida  = dispSalida.slice();
+
+  // establecer objetivos
+  tgtEntrada = entrada.slice();
+  tgtH1      = a1.slice();
+  tgtH2      = a2.slice();
+  tgtSalida  = probs.slice();
+
+  tweenStartTime = performance.now();
+  animating = true;
+}
+
+function stepTween(now){
+  if (!animating) return false;
+  const t = clamp01((now - tweenStartTime) / TWEEN_MS);
+  const e = easeOutCubic(t);
+
+  // interpolación
+  for (let i=0;i<dispEntrada.length;i++){
+    dispEntrada[i] = startEntrada[i] + (tgtEntrada[i]-startEntrada[i]) * e;
+  }
+  for (let i=0;i<dispH1.length;i++){
+    dispH1[i] = startH1[i] + (tgtH1[i]-startH1[i]) * e;
+  }
+  for (let i=0;i<dispH2.length;i++){
+    dispH2[i] = startH2[i] + (tgtH2[i]-startH2[i]) * e;
+  }
+  for (let i=0;i<dispSalida.length;i++){
+    dispSalida[i] = startSalida[i] + (tgtSalida[i]-startSalida[i]) * e;
+  }
+
+  if (t >= 1){
+    // asegurar aterrizaje exacto
+    dispEntrada = tgtEntrada.slice();
+    dispH1 = tgtH1.slice();
+    dispH2 = tgtH2.slice();
+    dispSalida = tgtSalida.slice();
+    animating = false;
+  }
+  return true;
+}
+
+function dibujarRedDesdeDisp(){
+  // conexiones dependen de pesos; gauges usan los valores interpolados
   const w = lienzoRed.width, h = lienzoRed.height;
   rctx.clearRect(0,0,w,h);
 
@@ -345,30 +490,19 @@ function dibujarRed(entrada=[], salida=[], h1=[], h2=[]){
   dibujarConexiones(W2, posiciones[1], posiciones[2], m2);
   dibujarConexiones(W3, posiciones[2], posiciones[3], m3);
 
-  function dibujarNeuronas(posCapa, activaciones=[]){
+  function dibujarNeuronasComoGauge(posCapa, activaciones=[], li){
+    const r = radioPorCapa(li);
     for (let i=0; i<posCapa.length; i++){
       const {x,y} = posCapa[i];
-      const a = activaciones[i] ?? 0;
-      const v = Math.max(0, Math.min(1, a));
-      const tono = Math.floor(40 + v*180);
-
-      rctx.beginPath();
-      rctx.arc(x, y, RADIO_NEURONA, 0, Math.PI*2);
-      rctx.fillStyle = `rgb(${tono},${tono+10},${tono+22})`;
-      rctx.fill();
-      rctx.lineWidth = 1.5;
-      rctx.strokeStyle = "#c9d2ff22";
-      rctx.stroke();
+      const a = clamp01(activaciones[i] ?? 0);
+      dibujarGauge(x, y, r, a);
     }
   }
 
-  const actEntrada = entrada.length===64 ? entrada : new Array(64).fill(0);
-  const actSalida  = salida.length===10 ? salida : new Array(10).fill(0);
-
-  dibujarNeuronas(posiciones[0], actEntrada);
-  dibujarNeuronas(posiciones[1], h1);
-  dibujarNeuronas(posiciones[2], h2);
-  dibujarNeuronas(posiciones[3], actSalida);
+  dibujarNeuronasComoGauge(posiciones[0], dispEntrada, 0);
+  dibujarNeuronasComoGauge(posiciones[1], dispH1, 1);
+  dibujarNeuronasComoGauge(posiciones[2], dispH2, 2);
+  dibujarNeuronasComoGauge(posiciones[3], dispSalida, 3);
 }
 
 // ======================
@@ -399,6 +533,7 @@ function dibujarGridH1(a1){
       }
     }
 
+    // overlay según activación (usamos dispH1 al dibujar en vivo)
     const act = Math.max(0, Math.min(1, a1[n] || 0));
     ctxH1.fillStyle = `rgba(255,255,255,${0.12 + 0.18*act})`;
     ctxH1.fillRect(x0, y0, tileSize, tileSize);
@@ -451,9 +586,9 @@ function dibujarGridsCaracteristicas(a1=[], a2=[]){
 }
 
 // ======================
-// Predicción en vivo
+// Predicción en vivo + bucle de animación
 // ======================
-function actualizarEnVivo(){
+function actualizarEnVivo(now){
   if (chkEnVivo.checked && hayCambios){
     const entrada = entrada8x8();
     const { a1, a2, probs } = inferir(entrada);
@@ -461,11 +596,21 @@ function actualizarEnVivo(){
 
     elResultado.textContent = pred.toString();
     pintarProbabilidades(probs);
-    dibujarRed(entrada, probs, a1, a2);
-    dibujarGridsCaracteristicas(a1, a2);
 
+    // establecer nuevos objetivos de tween (gauges y grids)
+    setGaugeTargets(entrada, a1, a2, probs);
+
+    // grids usan activaciones para overlay (que también interpolamos al dibujar)
     hayCambios = false;
   }
+
+  // avanzar tween (si hay)
+  const dirty = stepTween(performance.now());
+
+  // dibujar red y grids desde valores mostrados (interpolados)
+  dibujarRedDesdeDisp();
+  dibujarGridsCaracteristicas(dispH1, dispH2);
+
   requestAnimationFrame(actualizarEnVivo);
 }
 requestAnimationFrame(actualizarEnVivo);
@@ -504,10 +649,10 @@ function entrenarDataset(pasos, lr, l2){
 document.getElementById("btn-limpiar").addEventListener("click", ()=>{
   limpiarLienzo();
   elResultado.textContent = "?";
+  // setters de objetivos a cero para un tween hacia apagado
+  setGaugeTargets(new Array(64).fill(0), new Array(16).fill(0), new Array(16).fill(0), new Array(10).fill(0));
   pintarProbabilidades(new Array(10).fill(0));
-  dibujarRed(new Array(64).fill(0), new Array(10).fill(0), new Array(16).fill(0), new Array(16).fill(0));
-  dibujarGridsCaracteristicas(new Array(16).fill(0), new Array(16).fill(0));
-  hayCambios = true;
+  hayCambios = false; // ya se encarga el tween
 });
 document.getElementById("btn-suavizar").addEventListener("click", ()=> suavizar());
 document.getElementById("btn-reiniciar-pesos").addEventListener("click", ()=> reiniciarPesos());
@@ -529,8 +674,45 @@ document.getElementById("btn-train-500").addEventListener("click", ()=>{
   entrenarDataset(500, lr, l2);
 });
 
-// Pintado inicial
+// ======================
+// Controles (consola/atajos)
+// ======================
+// Cambia una capa concreta: 0=Entrada, 1=Oculta1, 2=Oculta2, 3=Salida
+window.setLayerGaugeScale = function(layer, scale){
+  const l = Math.max(0, Math.min(3, Math.floor(layer)));
+  const s = Math.max(0.5, Math.min(3, Number(scale) || 1.0));
+  GAUGE_SCALES[l] = s;
+};
+window.setAllGaugeScales = function(s0=1, s1=1, s2=1, s3=1){
+  GAUGE_SCALES = [
+    Math.max(0.5, Math.min(3, Number(s0)||1)),
+    Math.max(0.5, Math.min(3, Number(s1)||1)),
+    Math.max(0.5, Math.min(3, Number(s2)||1)),
+    Math.max(0.5, Math.min(3, Number(s3)||1)),
+  ];
+};
+// Duración del tween en caliente
+window.setTweenMs = function(ms){
+  TWEEN_MS = Math.max(0, Math.min(5000, Number(ms)||500));
+};
+
+// Atajos de teclado: Ctrl+1..4 para aumentar; Ctrl+Alt+1..4 para reducir
+document.addEventListener('keydown', (e)=>{
+  const keyToLayer = { '1':0, '2':1, '3':2, '4':3 };
+  if (keyToLayer.hasOwnProperty(e.key)){
+    const layer = keyToLayer[e.key];
+    if (e.ctrlKey && !e.altKey){
+      GAUGE_SCALES[layer] = Math.min(3, (GAUGE_SCALES[layer] + 0.1));
+    } else if (e.ctrlKey && e.altKey){
+      GAUGE_SCALES[layer] = Math.max(0.5, (GAUGE_SCALES[layer] - 0.1));
+    }
+  }
+});
+
+// ======================
+// Pintado inicial (estado reposo)
+// ======================
 pintarProbabilidades(new Array(10).fill(0));
-dibujarRed(new Array(64).fill(0), new Array(10).fill(0), new Array(16).fill(0), new Array(16).fill(0));
-dibujarGridsCaracteristicas(new Array(16).fill(0), new Array(16).fill(0));
+// arranque con tween suave desde 0 a 0 (no visible) y primer render
+setGaugeTargets(new Array(64).fill(0), new Array(16).fill(0), new Array(16).fill(0), new Array(10).fill(0));
 
